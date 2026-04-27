@@ -8,12 +8,42 @@
 // nothing else so I'm just kinda guessing at a lot of this
 //
 //------------------------------------------------------------------------------
-import { TaskDrawable, TaskDrawableFactory, TaskDrawableComponent, component, registerEditor, registerSimple, renderHTML, drawableEditorForm } from "@gorilla/compiled/task-builder.js"
+import { TaskDrawable, TaskDrawableFactory, TaskDrawableComponent,
+         component, registerEditor, registerSimple, drawableEditorForm } from "@gorilla/compiled/task-builder.js"
 
-// instance variables. unclear why it has to be an interface
+type Position = {
+    y: number;
+    x: number;
+};
+
+// instance variables. interfaces are a typescript thing
 export interface BallGameFactory extends TaskDrawableFactory {
+    // appearance stuff
     bgColour: string;
     ballColour: string;
+    fontSize: number;
+    fontFamily: string;
+    ballRadius: number; // ball velocity is directly proportional to its radius as per the paper
+    fontClickColour: string; // should be orange but I made it editable
+    textDuration: number; // amount of time the text is highlighted for
+
+    debug: boolean;
+    
+    // for rendering
+    canvas: HTMLCanvasElement;
+    ctx: CanvasRenderingContext2D;
+    scoreY: number;
+    scoreColour: string;
+
+    // ball variables
+    ballPos: Position;
+    ballTarget: Position;
+    ballVel: Position; // Not a position but it's fine idc
+
+    score: number;
+    clickTimer: number; // time between clicks
+    textTimer: number; // time before text returns to black
+    lastFrame: number; // timestamp of previous frame
 }
 
 @component(TaskDrawableComponent) // not 100% sure what this line does but it's necessary. the @ sign is also necessary??
@@ -24,18 +54,122 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
     }
 
     public screenStart() {
+        let canvas = this.factory.canvas;
+        canvas.width = this.drawableFrame[0].clientWidth;
+        canvas.height = this.drawableFrame[0].clientHeight
+        
+        // score placed 10px above bottom of screen
+        this.factory.scoreY = canvas.height - Number(this.factory.fontSize)/2;
+
+        // initialize game variables
+        this.factory.score = 0;
+        this.factory.ballPos = { x: canvas.width/2, y: canvas.height/2 };
+        this.factory.ballTarget = this.factory.ballPos; // this forces it to be re-chosen and sets the velocity
+
+        // actual start of the game
         if(this.runtimeModeOrEditorPlaying) {
             console.log("a");
         }
     }
 
     public initialise() {
-        super.initialise();
-        renderHTML(this.frame, `
-        <div style="background-color: {{bgColour}}; height: 100%; width: 100%">
-            
-        </div>
-        `, {bgColour: this.factory.bgColour});
+        super.initialise(); // possibly unnecessary
+
+        // create canvas
+        let canvas = document.createElement("canvas");
+        canvas.style.backgroundColor = this.factory.bgColour;
+        this.drawableFrame.append(canvas);
+        let ctx = canvas.getContext("2d");
+
+        // save globally
+        this.factory.canvas = canvas;
+        this.factory.ctx = ctx;
+    }
+
+    // updates every frame
+    public screenUpdate() {
+        // draw static frame if not playing
+        if(!this.runtimeModeOrEditorPlaying) {
+            this.drawFrame(this.factory.ctx, this.factory.canvas);
+            return;
+        }
+
+        // figure out time between frames in ms
+        let time = Date.now();
+        let dt = time - this.factory.lastFrame ?? time + 1000;
+
+        // distance from ball to target
+        let dx = this.factory.ballTarget.x - this.factory.ballPos.x;
+        let dy = this.factory.ballTarget.y - this.factory.ballPos.y;
+        var d1 = Math.sqrt(dx ** 2 + dy ** 2);
+
+        // choose new target if target is touching the ball. loop in case new target
+        // is also within the ball
+        if (d1 < this.factory.ballRadius) {
+            let c = 1;
+            while (d1 < this.factory.ballRadius && c < 10) {
+                // choose new position
+                this.factory.ballTarget = this.getRandomPosition();
+
+                dx = this.factory.ballTarget.x - this.factory.ballPos.x;
+                dy = this.factory.ballTarget.y - this.factory.ballPos.y;
+                d1 = Math.sqrt(dx ** 2 + dy ** 2);
+
+                c++;
+            }
+            // normalize dx and dy and set velocity to that
+            this.factory.ballVel = { x: dx / d1, y: dy / d1 };
+        }
+
+        // move ball based on velocity and ball radius
+        if (dt > 0) {
+            this.factory.ballPos = {
+                x: this.factory.ballPos.x + this.factory.ballRadius * this.factory.ballVel.x * dt / 500,
+                y: this.factory.ballPos.y + this.factory.ballRadius * this.factory.ballVel.y * dt / 500 };
+        }
+        
+        this.drawFrame(this.factory.ctx, this.factory.canvas);
+
+        this.factory.lastFrame = time;
+    }
+
+    private drawFrame(ctx:any, canvas:any) {
+        // clear frame
+        ctx.beginPath();
+        ctx.fillStyle = this.factory.bgColour;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.closePath();
+
+        // draw ball
+        let pos = this.factory.ballPos;
+        ctx.beginPath();
+        ctx.fillStyle = this.factory.ballColour;
+        ctx.arc(pos.x, pos.y, this.factory.ballRadius, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.closePath();
+
+        // draw score
+        ctx.fillStyle = "black"; // needs to change to orange when ball clicked
+        ctx.font = `${this.factory.fontSize}px ${this.factory.fontFamily}`;
+        ctx.fillText(`Score: ${this.factory.score}`, 10, this.factory.scoreY);
+
+        if (!this.factory.debug) return;
+        ctx.fillText(`pos x: ${Math.round(this.factory.ballPos.x)}`, 250, this.factory.scoreY-80);
+        ctx.fillText(`pos y: ${Math.round(this.factory.ballPos.y)}`, 250, this.factory.scoreY);
+        ctx.fillText(`target x: ${Math.round(this.factory.ballTarget.x)}`, 500, this.factory.scoreY-80);
+        ctx.fillText(`target y: ${Math.round(this.factory.ballTarget.y)}`, 500, this.factory.scoreY);
+        ctx.fillText(`vx: ${this.factory.ballVel.x}`, 850, this.factory.scoreY-80);
+        ctx.fillText(`vy: ${this.factory.ballVel.y}`, 850, this.factory.scoreY);
+    }
+
+    // returns a random position anywhere on the screen
+    // TODO: make it account for the ball's radius, score text and the ball's current position
+    private getRandomPosition(): Position {
+        let r = this.factory.ballRadius;
+        let d = r
+        let mX = this.factory.canvas.width;
+        let mY = this.factory.canvas.height;
+        return { x: Math.floor(Math.random() * (mX - d) + r), y: Math.floor(Math.random() * (mY - d) + r) };
     }
 }
 
@@ -58,7 +192,37 @@ registerEditor("BallGame", {
                 class: "FormElementColor",
                 field: "ballColour",
                 label: "Ball Colour"
-            }
+            },
+            {
+                class: "FormElementText",
+                field: "ballRadius",
+                label: "Ball Radius"
+            },
+            {
+                class: "FormElementText",
+                field: "fontSize",
+                label: "Font Size"
+            },
+            {
+                class: "FormElementText",
+                field: "fontFamily",
+                label: "Font Family"
+            },
+            {
+                class: "FormElementColor",
+                field: "fontClickColour",
+                label: "Font Colour on Click"
+            },
+            {
+                class: "FormElementText",
+                field: "textDuration",
+                label: "Text Highlight Duration"
+            },
+            {
+                class: "FormElementToggle",
+                field: "debug",
+                label: "Show Debug Info"
+            },
         ].concat(drawableEditorForm()) // add position and size
     }
 })
