@@ -44,6 +44,8 @@ export interface BallGameFactory extends TaskDrawableFactory {
     clickTimer: number; // time between clicks
     textTimer: number; // time before text returns to black
     lastFrame: number; // timestamp of previous frame
+
+    lastClick: Position;
 }
 
 @component(TaskDrawableComponent) // not 100% sure what this line does but it's necessary. the @ sign is also necessary??
@@ -66,6 +68,8 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.factory.ballPos = { x: canvas.width/2, y: canvas.height/2 };
         this.factory.ballTarget = this.factory.ballPos; // this forces it to be re-chosen and sets the velocity
 
+        this.factory.lastClick = { x:0, y:0 };
+
         // actual start of the game
         if(this.runtimeModeOrEditorPlaying) {
             console.log("a");
@@ -81,6 +85,17 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.drawableFrame.append(canvas);
         let ctx = canvas.getContext("2d");
 
+        // add event listener
+        canvas.addEventListener("click", (e) => {
+            let click = { x: e.offsetX, y: e.offsetY };
+            this.factory.lastClick = click;
+
+            if (this.calculateDistance(click, this.factory.ballPos) <= this.factory.ballRadius) {
+                this.factory.score++;
+                this.factory.textTimer = this.factory.textDuration;
+            }
+        });
+
         // save globally
         this.factory.canvas = canvas;
         this.factory.ctx = ctx;
@@ -93,21 +108,22 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
             this.drawFrame(this.factory.ctx, this.factory.canvas);
             return;
         }
+        // decrement timers
+        if (this.factory.textTimer > 0)
+            this.factory.textTimer--;
 
         // figure out time between frames in ms
         let time = Date.now();
         let dt = time - this.factory.lastFrame ?? time + 1000;
 
-        // distance from ball to target
-        let dx = this.factory.ballTarget.x - this.factory.ballPos.x;
-        let dy = this.factory.ballTarget.y - this.factory.ballPos.y;
-        var d1 = Math.sqrt(dx ** 2 + dy ** 2);
+        let d = this.calculateDistance(this.factory.ballTarget, this.factory.ballPos);
 
         // choose new target if target is touching the ball. loop in case new target
         // is also within the ball
-        if (d1 < this.factory.ballRadius) {
-            let c = 1;
-            while (d1 < this.factory.ballRadius && c < 10) {
+        if (d < this.factory.ballRadius) {
+            let dx:number, dy:number, d1:number, count = 0;
+
+            do {
                 // choose new position
                 this.factory.ballTarget = this.getRandomPosition();
 
@@ -115,8 +131,9 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
                 dy = this.factory.ballTarget.y - this.factory.ballPos.y;
                 d1 = Math.sqrt(dx ** 2 + dy ** 2);
 
-                c++;
-            }
+                count++;
+            } while (d < this.factory.ballRadius && count < 10)
+
             // normalize dx and dy and set velocity to that
             this.factory.ballVel = { x: dx / d1, y: dy / d1 };
         }
@@ -149,17 +166,21 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         ctx.closePath();
 
         // draw score
-        ctx.fillStyle = "black"; // needs to change to orange when ball clicked
+        ctx.fillStyle = this.factory.textTimer > 0 ? this.factory.fontClickColour : "black";
         ctx.font = `${this.factory.fontSize}px ${this.factory.fontFamily}`;
         ctx.fillText(`Score: ${this.factory.score}`, 10, this.factory.scoreY);
 
         if (!this.factory.debug) return;
+
+        ctx.fillStyle = "black";
         ctx.fillText(`pos x: ${Math.round(this.factory.ballPos.x)}`, 250, this.factory.scoreY-80);
         ctx.fillText(`pos y: ${Math.round(this.factory.ballPos.y)}`, 250, this.factory.scoreY);
         ctx.fillText(`target x: ${Math.round(this.factory.ballTarget.x)}`, 500, this.factory.scoreY-80);
         ctx.fillText(`target y: ${Math.round(this.factory.ballTarget.y)}`, 500, this.factory.scoreY);
         ctx.fillText(`vx: ${this.factory.ballVel.x}`, 850, this.factory.scoreY-80);
         ctx.fillText(`vy: ${this.factory.ballVel.y}`, 850, this.factory.scoreY);
+        ctx.fillText(`click x: ${this.factory.lastClick.x}`, 10, this.factory.fontSize);
+        ctx.fillText(`click y: ${this.factory.lastClick.y}`, 10, Number(this.factory.fontSize) * 2);
     }
 
     // returns a random position anywhere on the screen
@@ -170,6 +191,12 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         let mX = this.factory.canvas.width;
         let mY = this.factory.canvas.height;
         return { x: Math.floor(Math.random() * (mX - d) + r), y: Math.floor(Math.random() * (mY - d) + r) };
+    }
+
+    private calculateDistance(p1:Position, p2:Position): number {
+        let dx = p1.x - p2.x;
+        let dy = p1.y - p2.y;
+        return Math.sqrt(dx ** 2 + dy ** 2);
     }
 }
 
