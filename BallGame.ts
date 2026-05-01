@@ -59,8 +59,6 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
     }
 
     public screenStart() {
-        console.log("screenStart");
-
         let canvas = this.factory.canvas;
         canvas.width = this.drawableFrame[0].clientWidth;
         canvas.height = this.drawableFrame[0].clientHeight
@@ -78,15 +76,10 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.factory.clickTimer = 0;
         this.factory.textTimer = 0;
 
-        // actual start of the game
-        if(this.runtimeModeOrEditorPlaying) {
-            this.factory.lastFrame = Date.now();
-        }
+        this.factory.lastFrame = Date.now(); // update time right before game starts
     }
 
     public initialise() {
-        console.log("initialise");
-
         super.initialise(); // possibly unnecessary
 
         // create canvas
@@ -126,8 +119,6 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
             this.drawFrame(this.factory.ctx, this.factory.canvas);
             return;
         }
-
-        console.log("runtimeModeOrEditorPlaying");
 
         // figure out time between frames in ms
         let time = Date.now();
@@ -284,11 +275,6 @@ registerEditor("BallGame", {
                 class: "FormElementText",
                 field: "fidelity",
                 label: "Fidelity (0-100)"
-            },
-            {
-                class: "FormElementText",
-                field: "fontFamily",
-                label: "Font Family"
             },
             {
                 class: "FormElementText",
