@@ -8,8 +8,8 @@
 // nothing else so I'm just kinda guessing at a lot of this
 //
 //------------------------------------------------------------------------------
-import { TaskDrawable, TaskDrawableFactory, TaskDrawableComponent,
-         component, registerEditor, registerSimple, drawableEditorForm } from "@gorilla/compiled/task-builder.js"
+import { TaskDrawable, TaskDrawableFactory, TaskDrawableComponent, ResponseType,
+         component, registerEditor, registerSimple, drawableEditorForm, } from "@gorilla/compiled/task-builder.js"
 
 type Position = {
     y: number;
@@ -29,14 +29,29 @@ export interface BallGameFactory extends TaskDrawableFactory {
     debug: boolean; // whether to show debug info
 
     // test-specific fields
-    fidelity: number; // percent of time clicking adds to score. it will still reset the click timer
     clickDelay: number; // time between clicks
     initialDelay: number; // delay before clicking does anything
-    inCircle: boolean; // true - clicking circle increases score, false - click on background
+    fidelity: string; // percent of time clicking adds to score. it will still reset the click timer
+    inCircle: string; // true - clicking circle increases score, false - click on background
+    resettingDRO: string; // whether clicking the ball before the timer is up resets it or not
 }
 
 @component(TaskDrawableComponent) // not 100% sure what this line does but it's necessary. the @ sign is also necessary??
 export class BallGame extends TaskDrawable<BallGameFactory> {
+    // instance variables
+    private ballPos: Position;
+    private ballTarget: Position;
+    private ballVel: Position;
+    private score: number;
+    // timers
+    private initialTimer: number;
+    private clickTimer: number; // time between clicks
+    private textTimer: number; // time before text returns to black
+    private lastFrame: number; // timestamp of previous frame
+    // rendering
+    private canvas: HTMLCanvasElement;
+    private ctx: CanvasRenderingContext2D;
+    private scoreY: number;
 
     public apply(f: BallGameFactory) {
         super.apply(f);
@@ -76,19 +91,29 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         canvas.addEventListener("click", (e) => {
             let click = { x: e.offsetX, y: e.offsetY };
             let c = this.calculateDistance(click, this.ballPos) <= this.factory.ballRadius;
-            let b = this.factory.inCircle;
+            let b = this.injectBindings(this.factory.inCircle) == "ball";
 
             // clicked circle and meant to, or didnt and wasnt meant to AND initial timer over
-            if ( (c && b) || !(c || b) && this.initialTimer <= 0 && this.clickTimer <= 0) {
+            if ( (c && b) || !(c || b)) {
+                if (this.initialTimer <= 0 && this.clickTimer <= 0) {
                     this.clickTimer = this.factory.clickDelay;
 
                     // fidelity check
-                    if (Math.random() * 100 > this.factory.fidelity)
+                    if (Math.random() * 100 > Number(this.injectBindings(this.factory.fidelity)))
                         return;
 
                     this.score++;
                     this.textTimer = this.factory.textDuration;
+                } else if (this.injectBindings(this.factory.resettingDRO) == "true") {
+                    this.clickTimer = this.factory.clickDelay;
+                }
             }
+            // record response
+            this.triggerResponse({
+                responseType: ResponseType.Action,
+                response: `${c ? "circle" : "background"} clicked`,
+                onsetTime: this.screenManager.elapsedTime
+            });
         });
 
         // save globally
@@ -140,7 +165,6 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
 
         // move ball based on velocity and ball radius
         if (dt > 0 && dt < 1000) { // so the ball doesn't move off the screen during intense lag
-            console.log(dt);
             this.ballPos = {
                 x: this.ballPos.x + this.factory.ballRadius * this.ballVel.x * dt / 500,
                 y: this.ballPos.y + this.factory.ballRadius * this.ballVel.y * dt / 500 };
@@ -180,11 +204,13 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         ctx.fillText(`target y: ${Math.round(this.ballTarget.y)}`, 500, this.scoreY);
         ctx.fillText(`vx: ${this.ballVel.x}`, 850, this.scoreY-80);
         ctx.fillText(`vy: ${this.ballVel.y}`, 850, this.scoreY);
-        ctx.fillText(`fidelity: ${this.factory.fidelity}`, 10, this.factory.fontSize);
+        ctx.fillText(`fidelity: ${this.injectBindings(this.factory.fidelity)}%`, 10, this.factory.fontSize);
         ctx.fillText(`click delay: ${this.factory.clickDelay}s`, 500, this.factory.fontSize);
         ctx.fillText(`initial delay: ${this.factory.initialDelay}s`, 500, Number(this.factory.fontSize) + 80);
-        let c = this.factory.inCircle ? "circle" : "background";
-        ctx.fillText(`click ${c}`, 10, Number(this.factory.fontSize) + 80);
+        ctx.fillText(`click ${this.injectBindings(this.factory.inCircle)}`, 10, Number(this.factory.fontSize) + 80);
+        ctx.fillText(`click timer: ${Math.round(this.clickTimer*10)/10}`, 10, Number(this.factory.fontSize) + 160);
+        if (this.injectBindings(this.factory.resettingDRO) == "true")
+            ctx.fillText(`resetting`, 500, Number(this.factory.fontSize) + 160);
 
     }
 
@@ -203,21 +229,6 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         let dy = p1.y - p2.y;
         return Math.sqrt(dx ** 2 + dy ** 2);
     }
-
-    // instance variables
-    private ballPos: Position;
-    private ballTarget: Position;
-    private ballVel: Position;
-    private score: number;
-    // timers
-    private initialTimer: number;
-    private clickTimer: number; // time between clicks
-    private textTimer: number; // time before text returns to black
-    private lastFrame: number; // timestamp of previous frame
-    // rendering
-    private canvas: HTMLCanvasElement;
-    private ctx: CanvasRenderingContext2D;
-    private scoreY: number;
 }
 
 // registers the fields so they can be modified in the editor
@@ -272,11 +283,6 @@ registerEditor("BallGame", {
             },
             {
                 class: "FormElementText",
-                field: "fidelity",
-                label: "Fidelity (0-100)"
-            },
-            {
-                class: "FormElementText",
                 field: "clickDelay",
                 label: "Time Between Clicks (s)"
             },
@@ -286,9 +292,19 @@ registerEditor("BallGame", {
                 label: "Initial Delay Before Clicks (s)"
             },
             {
-                class: "FormElementToggle",
+                class: "FormElementBindableText",
+                field: "fidelity",
+                label: "Fidelity (0-100)"
+            },
+            {
+                class: "FormElementBindableText",
                 field: "inCircle",
-                label: "Clicking Within Circle (off for outside)"
+                label: "Target to Click"
+            },
+            {
+                class: "FormElementBindableText",
+                field: "resettingDRO",
+                label: "Resetting DRO"
             },
         ].concat(drawableEditorForm()) // add position and size
     }
