@@ -28,12 +28,15 @@ export interface BallGameFactory extends TaskDrawableFactory {
     textDuration: number; // amount of time the text is highlighted for
     debug: boolean; // whether to show debug info
 
+    score: number; // score has to be persistent, so it's in the factory
+
     // test-specific fields
     clickDelay: number; // time between clicks
     initialDelay: number; // delay before clicking does anything
     fidelity: string; // percent of time clicking adds to score. it will still reset the click timer
     inCircle: string; // true - clicking circle increases score, false - click on background
     resettingDRO: string; // whether clicking the ball before the timer is up resets it or not
+    resetScore: string; // whether to set score to zero (for beginning and midpoint)
 }
 
 @component(TaskDrawableComponent) // not 100% sure what this line does but it's necessary. the @ sign is also necessary??
@@ -42,7 +45,6 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
     private ballPos: Position;
     private ballTarget: Position;
     private ballVel: Position;
-    private score: number;
     // timers
     private initialTimer: number;
     private clickTimer: number; // time between clicks
@@ -65,14 +67,17 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         // score placed 10px above bottom of screen
         this.scoreY = canvas.height - Number(this.factory.fontSize)/2;
 
+        // reset score if necessary
+        if (this.injectBindings(this.factory.resetScore) == "true" || this.factory.score == undefined)
+            this.factory.score = 0;
+
         // initialize game variables
-        this.score = 0;
         this.ballPos = { x: canvas.width/2, y: canvas.height/2 };
         this.ballVel = { x: 0, y: 0 };
         this.ballTarget = this.ballPos; // this forces it to be re-chosen and sets the velocity
         // timers
         this.initialTimer = Number(this.factory.initialDelay);
-        this.clickTimer = 0;
+        this.clickTimer = this.factory.clickDelay;
         this.textTimer = 0;
 
         this.lastFrame = Date.now(); // update time right before game starts
@@ -92,27 +97,26 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
             let click = { x: e.offsetX, y: e.offsetY };
             let c = this.calculateDistance(click, this.ballPos) <= this.factory.ballRadius;
             let b = this.injectBindings(this.factory.inCircle) == "ball";
+            let r = false; // whether or not the click gets reinforced. only true in baseline
 
-            // clicked circle and meant to, or didnt and wasnt meant to AND initial timer over
-            if ( (c && b) || !(c || b)) {
-                if (this.initialTimer <= 0 && this.clickTimer <= 0) {
+            // check for target clicked, account for fidelity
+            if ( (c && b) || !(c || b) && Math.random() * 100 > Number(this.injectBindings(this.factory.fidelity))) {
+                // reset timer if doing DRO, otherwise (baseline) add point and reset timer when appropriate
+                if (this.injectBindings(this.factory.resettingDRO) == "true") {
                     this.clickTimer = this.factory.clickDelay;
-
-                    // fidelity check
-                    if (Math.random() * 100 > Number(this.injectBindings(this.factory.fidelity)))
-                        return;
-
-                    this.score++;
+                } else if (this.initialTimer <= 0 && this.clickTimer <= 0) {
+                    r = true;
+                    this.clickTimer = this.factory.clickDelay;
+                    this.factory.score++;
                     this.textTimer = this.factory.textDuration;
-                } else if (this.injectBindings(this.factory.resettingDRO) == "true") {
-                    this.clickTimer = this.factory.clickDelay;
                 }
             }
             // record response
             this.triggerResponse({
                 responseType: ResponseType.Action,
                 response: `${c ? "circle" : "background"} clicked`,
-                onsetTime: this.screenManager.elapsedTime
+                onsetTime: this.screenManager.elapsedTime,
+                tag: r ? "reinforced" : "not reinforced"
             });
         });
 
@@ -141,6 +145,12 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.textTimer--; // in frames
         this.initialTimer -= dt / 1000; // in seconds
         this.clickTimer -= dt / 1000;
+
+        // if doing DRO, give points and reset counter once it reaches zero
+        if (this.injectBindings(this.factory.resettingDRO) == "true" && this.clickTimer < 0) {
+            this.factory.score++;
+            this.clickTimer = this.factory.clickDelay;
+        }
 
         // choose new target if target is touching the ball. loop in case new target is also within the ball
         let d = this.calculateDistance(this.ballTarget, this.ballPos);
@@ -193,7 +203,7 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         // draw score
         ctx.fillStyle = this.textTimer > 0 ? this.factory.fontClickColour : "black";
         ctx.font = `${this.factory.fontSize}px ${this.factory.fontFamily}`;
-        ctx.fillText(`Score: ${this.score}`, 10, this.scoreY);
+        ctx.fillText(`Score: ${this.factory.score}`, 10, this.scoreY);
 
         if (!this.factory.debug) return;
 
@@ -211,6 +221,8 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         ctx.fillText(`click timer: ${Math.round(this.clickTimer*10)/10}`, 10, Number(this.factory.fontSize) + 160);
         if (this.injectBindings(this.factory.resettingDRO) == "true")
             ctx.fillText(`resetting`, 500, Number(this.factory.fontSize) + 160);
+        if (this.injectBindings(this.factory.resetScore) == "true")
+            ctx.fillText(`reset score`, 850, Number(this.factory.fontSize) + 160);
 
     }
 
@@ -305,6 +317,11 @@ registerEditor("BallGame", {
                 class: "FormElementBindableText",
                 field: "resettingDRO",
                 label: "Resetting DRO"
+            },
+            {
+                class: "FormElementBindableText",
+                field: "resetScore",
+                label: "Reset Score"
             },
         ].concat(drawableEditorForm()) // add position and size
     }
