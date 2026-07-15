@@ -37,6 +37,8 @@ export interface BallGameFactory extends TaskDrawableFactory {
     inCircle: string; // true - clicking circle increases score, false - click on background
     resettingDRO: string; // whether clicking the ball before the timer is up resets it or not
     resetScore: string; // whether to set score to zero (for beginning and midpoint)
+
+    mouseHoldLimit: number; // how long mouse can be held still before it gets recorded
 }
 
 @component(TaskDrawableComponent) // not 100% sure what this line does but it's necessary. the @ sign is also necessary??
@@ -50,6 +52,7 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
     private clickTimer: number; // time between clicks
     private textTimer: number; // time before text returns to black
     private lastFrame: number; // timestamp of previous frame
+    private mouseTimer: number; // time since last mouse movement
     // rendering
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
@@ -79,6 +82,7 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.initialTimer = Number(this.factory.initialDelay);
         this.clickTimer = this.factory.clickDelay;
         this.textTimer = 0;
+        this.mouseTimer = 0;
 
         this.lastFrame = Date.now(); // update time right before game starts
     }
@@ -92,15 +96,15 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.drawableFrame.append(canvas);
         let ctx = canvas.getContext("2d");
 
-        // add event listener
+        // respond to click
         canvas.addEventListener("click", (e) => {
             let click = { x: e.offsetX, y: e.offsetY };
             let c = this.calculateDistance(click, this.ballPos) <= this.factory.ballRadius;
             let b = this.injectBindings(this.factory.inCircle) == "ball";
             let r = false; // whether or not the click gets reinforced. only true in baseline
 
-            // check for target clicked, account for fidelity
-            if ( (c && b) || !(c || b) && Math.random() * 100 > Number(this.injectBindings(this.factory.fidelity))) {
+            // check for target clicked
+            if ( (c && b) || !(c || b) ) {
                 // reset timer if doing DRO, otherwise (baseline) add point and reset timer when appropriate
                 if (this.injectBindings(this.factory.resettingDRO) == "true") {
                     this.clickTimer = this.factory.clickDelay;
@@ -119,6 +123,8 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
                 tag: r ? "reinforced" : "not reinforced"
             });
         });
+        // mouse movement resets timer
+        canvas.addEventListener("mousemove", () => this.resetMouseTimer());
 
         // save globally
         this.canvas = canvas;
@@ -141,14 +147,26 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
             dt = 0;
         }
 
-        // decrement timers
+        // update timers
         this.textTimer--; // in frames
         this.initialTimer -= dt / 1000; // in seconds
         this.clickTimer -= dt / 1000;
+        this.mouseTimer += dt / 1000; // in seconds, increasing
 
         // if doing DRO, give points and reset counter once it reaches zero
         if (this.injectBindings(this.factory.resettingDRO) == "true" && this.clickTimer < 0) {
-            this.factory.score++;
+            // increase score, accounting for fidelity
+            if (Math.random() * 100 <= Number(this.injectBindings(this.factory.fidelity))) {
+                // update score, make text orange and record response
+                this.factory.score++;
+                this.textTimer = this.factory.textDuration;
+                this.triggerResponse({
+                    responseType: ResponseType.Info,
+                    response: "score increased",
+                    onsetTime: this.screenManager.elapsedTime
+            });
+            }
+
             this.clickTimer = this.factory.clickDelay;
         }
 
@@ -173,8 +191,15 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
             this.ballVel = { x: dx / d1, y: dy / d1 };
         }
 
-        // move ball based on velocity and ball radius
-        if (dt > 0 && dt < 1000) { // so the ball doesn't move off the screen during intense lag
+        // if time between frames is over a second, it's likely the user tabbed out, so record that
+        if (dt >= 1000) {
+            this.triggerResponse({
+                responseType: ResponseType.Action,
+                response: `froze for ${Math.round(dt / 100) / 10}s`,
+                onsetTime: this.screenManager.elapsedTime,
+                tag: "freeze"
+            });
+        } else if (dt > 0) { // move ball based on velocity and ball radius
             this.ballPos = {
                 x: this.ballPos.x + this.factory.ballRadius * this.ballVel.x * dt / 500,
                 y: this.ballPos.y + this.factory.ballRadius * this.ballVel.y * dt / 500 };
@@ -183,6 +208,11 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         this.drawFrame(this.ctx, this.canvas);
 
         this.lastFrame = time;
+    }
+
+    // pretty much just trigger response if necessary
+    public screenFinish() {
+        this.resetMouseTimer();
     }
 
     private drawFrame(ctx:any, canvas:any) {
@@ -219,6 +249,7 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         ctx.fillText(`initial delay: ${this.factory.initialDelay}s`, 500, Number(this.factory.fontSize) + 80);
         ctx.fillText(`click ${this.injectBindings(this.factory.inCircle)}`, 10, Number(this.factory.fontSize) + 80);
         ctx.fillText(`click timer: ${Math.round(this.clickTimer*10)/10}`, 10, Number(this.factory.fontSize) + 160);
+        ctx.fillText(`mouse timer: ${Math.round(this.mouseTimer*10)/10}`, 10, Number(this.factory.fontSize) + 240);
         if (this.injectBindings(this.factory.resettingDRO) == "true")
             ctx.fillText(`resetting`, 500, Number(this.factory.fontSize) + 160);
         if (this.injectBindings(this.factory.resetScore) == "true")
@@ -240,6 +271,20 @@ export class BallGame extends TaskDrawable<BallGameFactory> {
         let dx = p1.x - p2.x;
         let dy = p1.y - p2.y;
         return Math.sqrt(dx ** 2 + dy ** 2);
+    }
+
+    // reset mouse timer and record response if mouse was held for a while
+    private resetMouseTimer() {
+        if (this.mouseTimer >= this.factory.mouseHoldLimit) {
+            this.triggerResponse({
+                responseType: ResponseType.Action,
+                response: `mouse stopped for ${Math.round(this.mouseTimer * 10) / 10} seconds`,
+                // onsetTime is when the mouse stopped moving
+                onsetTime: this.screenManager.elapsedTime - (this.mouseTimer * 1000), // convert back to milliseconds
+                tag: "mouseHold"
+            });
+        }
+        this.mouseTimer = 0;
     }
 }
 
@@ -322,6 +367,11 @@ registerEditor("BallGame", {
                 class: "FormElementBindableText",
                 field: "resetScore",
                 label: "Reset Score"
+            },
+            {
+                class: "FormElementText",
+                field: "mouseHoldLimit",
+                label: "Max Mouse Hold Time"
             },
         ].concat(drawableEditorForm()) // add position and size
     }
